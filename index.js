@@ -3,11 +3,18 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Server } from 'socket.io';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import { availableParallelism } from 'node:os';
 import cluster from 'node:cluster';
 import { createAdapter, setupPrimary } from '@socket.io/cluster-adapter';
+import { createClient } from 'redis';
+
+const client = createClient({
+    password: 'qoBkPF1Tb3W3Cz4rWvswWZTxeNYbGT4h',
+    socket: {
+        host: 'redis-18757.c321.us-east-1-2.ec2.cloud.redislabs.com',
+        port: 18757
+    }
+});
 
 if (cluster.isPrimary) {
   const numCPUs = availableParallelism();
@@ -19,18 +26,7 @@ if (cluster.isPrimary) {
 
   setupPrimary();
 } else {
-  const db = await open({
-    filename: 'chat.db',
-    driver: sqlite3.Database
-  });
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      client_offset TEXT UNIQUE,
-      content TEXT
-    );
-  `);
+  await client.connect();
 
   const app = express();
   const server = createServer(app);
@@ -46,30 +42,29 @@ if (cluster.isPrimary) {
   });
 
   io.on('connection', async (socket) => {
-    socket.on('chat message', async (msg, clientOffset, callback) => {
-      let result;
-      try {
-        result = await db.run('INSERT INTO messages (content, client_offset) VALUES (?, ?)', msg, clientOffset);
-      } catch (e) {
-        if (e.errno === 19 /* SQLITE_CONSTRAINT */ ) {
-          callback();
-        } else {
-          // nothing to do, just let the client retry
-        }
-        return;
-      }
-      io.emit('chat message', msg, result.lastID);
+    socket.on('chat message', async (msg, messageId, callback) => {
+      // Set a string data type. Key being the messageId, Value is the message.
+      await client.set(`chat:message:${messageId}`, msg);
+
+      // Append new message id to the end of messages list
+      await client.rPush('chat:messages', messageId);
+
+      // Notify all clients via websockets that a new message has arrived
+      io.emit('chat message', msg, messageId);
       callback();
     });
 
     if (!socket.recovered) {
       try {
-        await db.each('SELECT id, content FROM messages WHERE id > ?',
-          [socket.handshake.auth.serverOffset || 0],
-          (_err, row) => {
-            socket.emit('chat message', row.content, row.id);
+        // Retrieve all saved messages from chat:messages list
+        const messageIds = await client.lRange('chat:messages', 0, -1);
+
+        if (messageIds.length > 0) {
+          for (const messageId of messageIds) {
+            const message = await client.get(`chat:message:${messageId}`);
+            socket.emit('chat message', message, messageId);
           }
-        )
+        }
       } catch (e) {
         // something went wrong
       }
