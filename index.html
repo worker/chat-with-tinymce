@@ -6,7 +6,7 @@
   <style>
       body { margin: 0; padding-bottom: 3rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 
-      #form { background: rgba(0, 0, 0, 0.15); padding: 0.25rem; position: fixed; bottom: 0; left: 0; right: 0; display: flex; height: 3rem; box-sizing: border-box; backdrop-filter: blur(10px); }
+      #form { background: rgba(0, 0, 0, 0.15); padding: 0.25rem; position: fixed; bottom: 0; left: 0; right: 0; display: flex; height: 20rem; box-sizing: border-box; backdrop-filter: blur(10px); }
       #input { border: none; padding: 0 1rem; flex-grow: 1; border-radius: 2rem; margin: 0.25rem; }
       #input:focus { outline: none; }
       #form > button { background: #333; border: none; padding: 0 1rem; margin: 0.25rem; border-radius: 3px; outline: none; color: #fff; }
@@ -15,11 +15,15 @@
       #messages > li { padding: 0.5rem 1rem; }
       #messages > li:nth-child(odd) { background: #efefef; }
   </style>
+
+  <!-- Place the first <script> tag in your HTML's <head> -->
+  <script src="https://cdn.tiny.cloud/1/eoz4ivl0txkwdz4iyfz1vwk2ctwxpsjhqqpbtttr9on9bahr/tinymce/6/tinymce.min.js" referrerpolicy="origin"></script>
 </head>
 <body>
   <ul id="messages"></ul>
   <form id="form" action="">
-    <input id="input" autocomplete="off" /><button>Send</button>
+    <textarea id="input" autocomplete="off"></textarea>
+    <button>Send</button>
   </form>
   <script src="/socket.io/socket.io.js"></script>
   <script>
@@ -39,20 +43,80 @@
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      if (input.value) {
+
+      const tinymceInput = tinymce.get('input')
+      if (tinymceInput.getContent()) {
         const clientOffset = `${socket.id}-${counter++}`;
-        socket.emit('chat message', input.value, clientOffset);
-        input.value = '';
+        socket.emit('chat message', tinymceInput.getContent(), clientOffset);
+        tinymceInput.resetContent();
       }
     });
 
     socket.on('chat message', (msg, serverOffset) => {
       const item = document.createElement('li');
-      item.textContent = msg;
+      item.innerHTML = msg;
       messages.appendChild(item);
       window.scrollTo(0, document.body.scrollHeight);
       socket.auth.serverOffset = serverOffset;
     });
+  </script>
+
+  <!-- Place the following <script> and <textarea> tags your HTML's <body> -->
+  <script>
+    tinymce.init({
+      selector: '#input',
+      plugins: 'ai wordcount', // tinycomments mentions anchor autolink charmap codesample emoticons image link lists media searchreplace table visualblocks wordcount checklist mediaembed casechange export formatpainter pageembed permanentpen footnotes advtemplate advtable advcode editimage tableofcontents mergetags powerpaste tinymcespellchecker autocorrect a11ychecker typography inlinecss',
+      toolbar: 'wordcount | aidialog | undo redo | blocks fontfamily fontsize | bold italic underline strikethrough | link align lineheight | checklist numlist bullist indent outdent | emoticons charmap | removeformat',
+      // tinycomments_mode: 'embedded',
+      // tinycomments_author: 'Author name',
+      // mergetags_list: [
+      //   { value: 'First.Name', title: 'First Name' },
+      //   { value: 'Email', title: 'Email' },
+      // ],
+      height: '300px', 
+      ai_request: (request, respondWith) => {
+        const openAiOptions = {
+          method: 'POST', 
+          headers: {
+            'Content-Type': 'application/json', 
+            'Authorization': `Bearer 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`
+          }, 
+          body: JSON.stringify(
+            {
+              model: 'gpt-3.5-turbo', 
+              temperature: 0.7, 
+              max_tokens: 800, 
+              messages: [
+                {
+                  role: 'user', 
+                  content: request.prompt
+                }
+              ]
+            }
+          )
+        };
+
+        respondWith.string((signal) =>
+            window.fetch('https://api.openai.com/v1/chat/completions', {
+                signal, 
+                ... openAiOptions
+            }).then(async(response) => {
+                if (response.ok){
+                return response.json(); 
+                } else {
+                    return Promise.reject(`Failed to communicate with the OpenAI API. ${
+                    await response.text()
+                }`);
+                }
+            }).then((data)=> data.error ? 
+            Promise.reject(`Failed to communicate with ChatGPT API because of ${
+                data.error.type
+            } error: ${
+                data.error.message
+            }`) : data).then((data) =>
+                data?.choices[0]?.message?.content?.trim()));
+      }
+    }); 
   </script>
 </body>
 </html>
